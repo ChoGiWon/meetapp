@@ -27,7 +27,6 @@
             overflow: hidden; background: #FAFAFA; font-family: sans-serif;
             position: relative;
         }
-        /* display: none 대신 visibility + z-index를 사용하여 WebGL(TMAP) 캔버스 크기 0x0 붕괴 방지 */
         .provider-panel {
             position: absolute;
             top: 0;
@@ -183,35 +182,64 @@
         };
 
         // =============================================================
-        // [1] 페이지 로드 시 3사 SDK 상태 확인 및 초기화
+        // [1] 티맵 WebGL 캔버스 초기화 / 탭 복귀 시 재생성 함수
         // =============================================================
-        function initAllMaps() {
-            // 1. 티맵 초기화
+        function rebuildTmap() {
             if (!tmapKey || tmapKey.indexOf("붙여넣기") !== -1) {
                 showStatusMessage("tmap_div", "API 키 연동 대기 중", "티맵 (TMAP)", "<code>config.py</code>의 <code>TMAP_APP_KEY</code>를 확인해 주세요.", false);
-            } else if (typeof Tmapv3 !== "undefined" && Tmapv3.Map) {
-                try {
-                    tmapObj = new Tmapv3.Map("tmap_div", {
-                        center: new Tmapv3.LatLng(currentLat, currentLon),
-                        width: "100%",
-                        height: "100%",
-                        zoom: 16
-                    });
-                    if (hasSearched) {
-                        applyTmapMarker(currentLat, currentLon, currentTitle);
-                    }
-                } catch (e) {
-                    showStatusMessage("tmap_div", "티맵 초기화 오류", "티맵 렌더링 실패", String(e), true);
-                }
-            } else {
+                updateZoomVisibility();
+                return;
+            }
+            if (typeof Tmapv3 === "undefined" || !Tmapv3.Map) {
                 showStatusMessage(
                     "tmap_div",
                     "티맵 인증 / 도메인 확인",
                     "티맵 SDK를 불러오지 못했습니다",
-                    "SK Open API 콘솔에서 <code>TMAP_APP_KEY</code> 상태 및<br>허용 도메인(<code>https://chogiwon.github.io</code>) 설정을 확인해 주세요.",
+                    "SK Open API 콘솔에서 <code>TMAP_APP_KEY</code> 상태를 확인해 주세요.",
                     true
                 );
+                updateZoomVisibility();
+                return;
             }
+
+            var tDiv = document.getElementById("tmap_div");
+            if (!tDiv) return;
+
+            if (tmapObj) {
+                try {
+                    if (typeof tmapObj.destroy === "function") {
+                        tmapObj.destroy();
+                    }
+                } catch (e) {}
+                tmapObj = null;
+                tmapMarker = null;
+                tmapInfoWindow = null;
+            }
+
+            tDiv.innerHTML = "";
+
+            try {
+                tmapObj = new Tmapv3.Map("tmap_div", {
+                    center: new Tmapv3.LatLng(currentLat, currentLon),
+                    width: "100%",
+                    height: "100%",
+                    zoom: 16
+                });
+                if (hasSearched) {
+                    applyTmapMarker(currentLat, currentLon, currentTitle);
+                }
+            } catch (e) {
+                showStatusMessage("tmap_div", "티맵 초기화 오류", "티맵 렌더링 실패", String(e), true);
+            }
+            updateZoomVisibility();
+        }
+
+        // =============================================================
+        // [2] 페이지 로드 시 3사 SDK 상태 확인 및 초기화
+        // =============================================================
+        function initAllMaps() {
+            // 1. 티맵 초기화
+            rebuildTmap();
 
             // 2. 카카오맵 SDK 로드 확인
             if (!kakaoKey || kakaoKey.indexOf("붙여넣기") !== -1) {
@@ -226,7 +254,7 @@
                     "kakao_div",
                     "카카오맵 인증 오류",
                     "카카오맵 도메인 / 키 / 활성화 확인",
-                    "카카오 디벨로퍼스에서 아래 3가지를 확인해 주세요.<br>1. <code>제품 설정 &gt; 카카오맵</code> 활성화 <b>ON</b><br>2. <code>Web 플랫폼</code>에 <code>https://chogiwon.github.io</code> 등록<br>3. <b>JavaScript 키</b> 사용 여부",
+                    "카카오 디벨로퍼스에서 <code>카카오맵 ON</code> 및 <code>https://chogiwon.github.io</code> 등록을 확인해 주세요.",
                     true
                 );
             }
@@ -300,7 +328,7 @@
         }
 
         // =============================================================
-        // [2] 지도별 마커 및 말풍선 동기화 함수
+        // [3] 지도별 마커 및 말풍선 동기화 함수
         // =============================================================
         function applyTmapMarker(lat, lon, title) {
             if (!tmapObj || typeof Tmapv3 === "undefined") return;
@@ -373,7 +401,7 @@
         }
 
         // =============================================================
-        // [3] 파이썬(Flet)에서 호출하는 제어 함수
+        // [4] 파이썬(Flet)에서 호출하는 제어 함수
         // =============================================================
         function switchProvider(providerId) {
             activeProvider = providerId;
@@ -393,12 +421,11 @@
                 ensureKakaoMap();
             } else if (providerId === "naver") {
                 ensureNaverMap();
-            } else if (providerId === "tmap" && tmapObj) {
-                if (typeof tmapObj.resize === "function") {
-                    tmapObj.resize();
-                }
-                window.dispatchEvent(new Event("resize"));
-                tmapObj.setCenter(new Tmapv3.LatLng(currentLat, currentLon));
+            } else if (providerId === "tmap") {
+                // 패널이 visible 상태로 전환된 직후 WebGL 캔버스를 현재 좌표/마커 상태로 새로 렌더링
+                requestAnimationFrame(function () {
+                    rebuildTmap();
+                });
             }
             updateZoomVisibility();
         }
@@ -415,7 +442,9 @@
                 banner.style.display = "block";
             }
 
-            applyTmapMarker(lat, lon, currentTitle);
+            if (activeProvider === "tmap") {
+                applyTmapMarker(lat, lon, currentTitle);
+            }
             applyKakaoMarker(lat, lon, currentTitle);
             applyNaverMarker(lat, lon, currentTitle);
         }
