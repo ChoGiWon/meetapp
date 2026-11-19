@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <title>MeetApp Map</title>
+    <style>
+        html, body {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            overflow: hidden; background: #FAFAFA; font-family: sans-serif;
+        }
+        .provider-panel {
+            display: none; width: 100%; height: 100%; position: relative;
+        }
+        .provider-panel.active {
+            display: block;
+        }
+        .map-canvas {
+            width: 100%; height: 100%; touch-action: none;
+        }
+        .status-box {
+            width: 100%; height: 100%; padding: 24px; box-sizing: border-box;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            text-align: center; color: #333333; background: #FAFAFA;
+        }
+        .badge {
+            background: #E8F5E9; color: #13A84F; padding: 6px 12px;
+            border-radius: 16px; font-weight: bold; font-size: 13px; margin-bottom: 12px;
+        }
+        .badge.warn {
+            background: #FFF3E0; color: #E65100;
+        }
+        .status-box h3 { margin: 0 0 8px 0; font-size: 18px; }
+        .status-box p { margin: 0; font-size: 13px; color: #666666; line-height: 1.6; }
+        code { background: #EEEEEE; padding: 2px 6px; border-radius: 4px; color: #D32F2F; }
+        .zoom-controls {
+            position: fixed; right: 14px; bottom: 95px; z-index: 9999;
+            display: flex; flex-direction: column; gap: 8px;
+        }
+        .zoom-btn {
+            width: 44px; height: 44px; border-radius: 10px;
+            background: #FFFFFF; border: 1px solid #D0D7DE;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.22);
+            font-size: 24px; font-weight: bold; color: #111111;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; user-select: none;
+        }
+        .zoom-btn:active { background: #E9ECEF; }
+        .place-banner {
+            position: fixed; left: 14px; top: 12px; z-index: 9998;
+            background: rgba(255, 255, 255, 0.95); border: 1px solid #DCDFE4;
+            border-radius: 8px; padding: 6px 12px; font-size: 12px;
+            font-weight: bold; color: #111111; box-shadow: 0 2px 5px rgba(0,0,0,0.12);
+            display: none; max-width: 72%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+    </style>
+</head>
+<body>
+    <div id="place_banner" class="place-banner"></div>
+
+    <!-- 티맵 패널 -->
+    <div id="panel_tmap" class="provider-panel active">
+        <div id="tmap_div" class="map-canvas"></div>
+    </div>
+
+    <!-- 카카오맵 패널 -->
+    <div id="panel_kakao" class="provider-panel">
+        <div id="kakao_div" class="map-canvas"></div>
+    </div>
+
+    <!-- 네이버맵 패널 -->
+    <div id="panel_naver" class="provider-panel">
+        <div id="naver_div" class="map-canvas"></div>
+    </div>
+
+    <!-- 공통 확대/축소 버튼 -->
+    <div id="zoom_box" class="zoom-controls">
+        <button class="zoom-btn" onclick="zoomIn()">+</button>
+        <button class="zoom-btn" onclick="zoomOut()">−</button>
+    </div>
+
+    <script>
+        var urlParams = new URLSearchParams(window.location.search);
+        var tmapKey = (urlParams.get("tmap") || "").trim();
+        var kakaoKey = (urlParams.get("kakao") || "").trim();
+        var naverKey = (urlParams.get("naver") || "").trim();
+
+        var activeProvider = "tmap";
+        var currentLat = 37.5665;
+        var currentLon = 126.9780;
+        var currentTitle = "";
+        var hasSearched = false;
+
+        var tmapObj = null;
+        var tmapMarker = null;
+        var tmapInfoWindow = null;
+
+        var kakaoSdkReady = false;
+        var kakaoObj = null;
+        var kakaoMarker = null;
+        var kakaoInfoWindow = null;
+
+        var naverSdkReady = false;
+        var naverObj = null;
+        var naverMarker = null;
+        var naverInfoWindow = null;
+
+        function escapeHtml(text) {
+            if (!text) return "";
+            return text
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        function showStatusMessage(containerId, badgeText, title, descHtml, isWarn) {
+            var el = document.getElementById(containerId);
+            if (!el) return;
+            el.innerHTML =
+                '<div class="status-box">' +
+                '<div class="badge ' + (isWarn ? 'warn' : '') + '">' + badgeText + '</div>' +
+                '<h3>' + title + '</h3>' +
+                '<p>' + descHtml + '</p>' +
+                '</div>';
+        }
+
+        function buildMarkerLabelHtml(title) {
+            return (
+                '<div style="background:#222222; color:#FFFFFF; padding:5px 10px; ' +
+                'border-radius:6px; font-size:12px; font-weight:bold; white-space:nowrap; ' +
+                'box-shadow:0 2px 6px rgba(0,0,0,0.28);">' +
+                escapeHtml(title) +
+                '</div>'
+            );
+        }
+
+        function updateZoomVisibility() {
+            var zoomBox = document.getElementById("zoom_box");
+            if (!zoomBox) return;
+            var hasMap = (activeProvider === "tmap" && tmapObj) ||
+                         (activeProvider === "kakao" && kakaoObj) ||
+                         (activeProvider === "naver" && naverObj);
+            zoomBox.style.display = hasMap ? "flex" : "none";
+        }
+
+        // 네이버 인증 실패 시 안내 콜백
+        window.navermap_authFailure = function () {
+            naverObj = null;
+            showStatusMessage(
+                "naver_div",
+                "네이버 지도 인증 오류",
+                "네이버맵 URL / Client ID 확인 필요",
+                "네이버 클라우드 플랫폼 콘솔의 <code>Web 서비스 URL</code>에<br><code>https://chogiwon.github.io</code>가 등록되었는지 확인해 주세요.",
+                true
+            );
+            updateZoomVisibility();
+        };
+
+        // =============================================================
+        // [1] 3사 지도 SDK 동적 로드
+        // =============================================================
+        function loadMapSdks() {
+            // 1. 티맵 SDK 로드
+            if (!tmapKey || tmapKey.indexOf("붙여넣기") !== -1) {
+                showStatusMessage("tmap_div", "API 키 연동 대기 중", "티맵 (TMAP)", "<code>config.py</code>의 <code>TMAP_APP_KEY</code>를 확인해 주세요.", false);
+            } else {
+                var tScript = document.createElement("script");
+                tScript.src = "https://apis.openapi.sk.com/tmap/vectorjs?version=1&appKey=" + encodeURIComponent(tmapKey);
+                tScript.onload = function () {
+                    initTmapWithRetry(0);
+                };
+                tScript.onerror = function () {
+                    showStatusMessage("tmap_div", "로드 실패", "티맵 SDK 로드 오류", "네트워크 상태 또는 <code>TMAP_APP_KEY</code>를 확인해 주세요.", true);
+                };
+                document.head.appendChild(tScript);
+            }
+
+            // 2. 카카오맵 SDK 로드 (autoload=false로 안전 초기화)
+            if (!kakaoKey || kakaoKey.indexOf("붙여넣기") !== -1) {
+                showStatusMessage("kakao_div", "API 키 연동 대기 중", "카카오맵 (Kakao Map)", "<code>config.py</code>의 <code>KAKAO_JS_KEY</code>를 입력해 주세요.", false);
+            } else {
+                var kScript = document.createElement("script");
+                kScript.src = "https://dapi.kakao.com/v2/maps/sdk.js?appkey=" + encodeURIComponent(kakaoKey) + "&autoload=false";
+                kScript.onload = function () {
+                    kakaoSdkReady = true;
+                    if (activeProvider === "kakao") {
+                        ensureKakaoMap();
+                    }
+                };
+                kScript.onerror = function () {
+                    showStatusMessage(
+                        "kakao_div",
+                        "카카오맵 인증 오류",
+                        "카카오맵 도메인 / 키 확인 필요",
+                        "카카오 디벨로퍼스 <code>Web 플랫폼</code>에<br><code>https://chogiwon.github.io</code> 등록 및 <code>카카오맵 ON</code> 상태를 확인해 주세요.",
+                        true
+                    );
+                };
+                document.head.appendChild(kScript);
+            }
+
+            // 3. 네이버맵 SDK 로드 (신규 Maps 상품 파라미터 ncpKeyId 적용)
+            if (!naverKey || naverKey.indexOf("붙여넣기") !== -1) {
+                showStatusMessage("naver_div", "API 키 연동 대기 중", "네이버 지도 (Naver Map)", "<code>config.py</code>의 <code>NAVER_CLIENT_ID</code>를 입력해 주세요.", false);
+            } else {
+                var nScript = document.createElement("script");
+                nScript.src = "https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=" + encodeURIComponent(naverKey);
+                nScript.onload = function () {
+                    naverSdkReady = true;
+                    if (activeProvider === "naver") {
+                        ensureNaverMap();
+                    }
+                };
+                nScript.onerror = function () {
+                    showStatusMessage(
+                        "naver_div",
+                        "로드 실패",
+                        "네이버 지도 SDK 로드 오류",
+                        "네트워크 연결 및 <code>NAVER_CLIENT_ID</code>를 확인해 주세요.",
+                        true
+                    );
+                };
+                document.head.appendChild(nScript);
+            }
+        }
+
+        function initTmapWithRetry(attempt) {
+            if (typeof Tmapv3 !== "undefined" && Tmapv3.Map) {
+                try {
+                    tmapObj = new Tmapv3.Map("tmap_div", {
+                        center: new Tmapv3.LatLng(currentLat, currentLon),
+                        width: "100%",
+                        height: "100%",
+                        zoom: 16
+                    });
+                    if (hasSearched) {
+                        applyTmapMarker(currentLat, currentLon, currentTitle);
+                    }
+                    updateZoomVisibility();
+                } catch (e) {
+                    console.error("TMAP init error:", e);
+                }
+            } else if (attempt < 20) {
+                setTimeout(function () { initTmapWithRetry(attempt + 1); }, 100);
+            }
+        }
+
+        function ensureKakaoMap() {
+            if (!kakaoSdkReady || typeof kakao === "undefined" || !kakao.maps) return;
+            if (!kakaoObj) {
+                kakao.maps.load(function () {
+                    try {
+                        var container = document.getElementById("kakao_div");
+                        kakaoObj = new kakao.maps.Map(container, {
+                            center: new kakao.maps.LatLng(currentLat, currentLon),
+                            level: 3
+                        });
+                        if (hasSearched) {
+                            applyKakaoMarker(currentLat, currentLon, currentTitle);
+                        }
+                        updateZoomVisibility();
+                    } catch (e) {
+                        console.error("Kakao init error:", e);
+                    }
+                });
+            } else {
+                kakaoObj.relayout();
+                kakaoObj.setCenter(new kakao.maps.LatLng(currentLat, currentLon));
+                updateZoomVisibility();
+            }
+        }
+
+        function ensureNaverMap() {
+            if (!naverSdkReady || typeof naver === "undefined" || !naver.maps) return;
+            if (!naverObj) {
+                try {
+                    naverObj = new naver.maps.Map("naver_div", {
+                        center: new naver.maps.LatLng(currentLat, currentLon),
+                        zoom: 16
+                    });
+                    if (hasSearched) {
+                        applyNaverMarker(currentLat, currentLon, currentTitle);
+                    }
+                    updateZoomVisibility();
+                } catch (e) {
+                    console.error("Naver init error:", e);
+                }
+            } else {
+                window.dispatchEvent(new Event("resize"));
+                naverObj.setCenter(new naver.maps.LatLng(currentLat, currentLon));
+                updateZoomVisibility();
+            }
+        }
+
+        // =============================================================
+        // [2] 지도별 마커 및 말풍선 동기화 함수
+        // =============================================================
+        function applyTmapMarker(lat, lon, title) {
+            if (!tmapObj || typeof Tmapv3 === "undefined") return;
+            var tPos = new Tmapv3.LatLng(lat, lon);
+            tmapObj.setCenter(tPos);
+            tmapObj.setZoom(16);
+
+            if (tmapMarker) { tmapMarker.setMap(null); tmapMarker = null; }
+            if (tmapInfoWindow) { tmapInfoWindow.setMap(null); tmapInfoWindow = null; }
+
+            tmapMarker = new Tmapv3.Marker({
+                position: tPos,
+                map: tmapObj
+            });
+
+            if (title) {
+                tmapInfoWindow = new Tmapv3.InfoWindow({
+                    position: tPos,
+                    content: buildMarkerLabelHtml(title),
+                    border: "0px solid #000000",
+                    background: "transparent",
+                    type: 2,
+                    map: tmapObj
+                });
+            }
+        }
+
+        function applyKakaoMarker(lat, lon, title) {
+            if (!kakaoObj || typeof kakao === "undefined") return;
+            var kPos = new kakao.maps.LatLng(lat, lon);
+            kakaoObj.setCenter(kPos);
+
+            if (kakaoMarker) { kakaoMarker.setMap(null); kakaoMarker = null; }
+            if (kakaoInfoWindow) { kakaoInfoWindow.close(); kakaoInfoWindow = null; }
+
+            kakaoMarker = new kakao.maps.Marker({ position: kPos });
+            kakaoMarker.setMap(kakaoObj);
+
+            if (title) {
+                kakaoInfoWindow = new kakao.maps.InfoWindow({
+                    position: kPos,
+                    content: '<div style="padding:5px 10px; font-size:12px; font-weight:bold; color:#111111; white-space:nowrap;">' + escapeHtml(title) + '</div>'
+                });
+                kakaoInfoWindow.open(kakaoObj, kakaoMarker);
+            }
+        }
+
+        function applyNaverMarker(lat, lon, title) {
+            if (!naverObj || typeof naver === "undefined") return;
+            var nPos = new naver.maps.LatLng(lat, lon);
+            naverObj.setCenter(nPos);
+
+            if (naverMarker) { naverMarker.setMap(null); naverMarker = null; }
+            if (naverInfoWindow) { naverInfoWindow.close(); naverInfoWindow = null; }
+
+            naverMarker = new naver.maps.Marker({
+                position: nPos,
+                map: naverObj
+            });
+
+            if (title) {
+                naverInfoWindow = new naver.maps.InfoWindow({
+                    content: '<div style="padding:5px 10px; font-size:12px; font-weight:bold; color:#111111; white-space:nowrap;">' + escapeHtml(title) + '</div>',
+                    borderWidth: 1,
+                    borderColor: "#CCCCCC",
+                    backgroundColor: "#FFFFFF"
+                });
+                naverInfoWindow.open(naverObj, naverMarker);
+            }
+        }
+
+        // =============================================================
+        // [3] 파이썬(Flet)에서 호출하는 제어 함수
+        // =============================================================
+        function switchProvider(providerId) {
+            activeProvider = providerId;
+            var panels = ["tmap", "kakao", "naver"];
+            for (var i = 0; i < panels.length; i++) {
+                var el = document.getElementById("panel_" + panels[i]);
+                if (el) {
+                    if (panels[i] === providerId) {
+                        el.classList.add("active");
+                    } else {
+                        el.classList.remove("active");
+                    }
+                }
+            }
+
+            if (providerId === "kakao") {
+                ensureKakaoMap();
+            } else if (providerId === "naver") {
+                ensureNaverMap();
+            } else if (providerId === "tmap" && tmapObj) {
+                tmapObj.setCenter(new Tmapv3.LatLng(currentLat, currentLon));
+            }
+            updateZoomVisibility();
+        }
+
+        function moveToLocation(lat, lon, title) {
+            currentLat = lat;
+            currentLon = lon;
+            currentTitle = title || "";
+            hasSearched = true;
+
+            var banner = document.getElementById("place_banner");
+            if (banner && currentTitle) {
+                banner.innerText = "📍 " + currentTitle;
+                banner.style.display = "block";
+            }
+
+            applyTmapMarker(lat, lon, currentTitle);
+            applyKakaoMarker(lat, lon, currentTitle);
+            applyNaverMarker(lat, lon, currentTitle);
+        }
+
+        function zoomIn() {
+            if (activeProvider === "tmap" && tmapObj) {
+                tmapObj.setZoom(tmapObj.getZoom() + 1);
+            } else if (activeProvider === "kakao" && kakaoObj) {
+                kakaoObj.setLevel(kakaoObj.getLevel() - 1);
+            } else if (activeProvider === "naver" && naverObj) {
+                naverObj.setZoom(naverObj.getZoom() + 1);
+            }
+        }
+
+        function zoomOut() {
+            if (activeProvider === "tmap" && tmapObj) {
+                tmapObj.setZoom(tmapObj.getZoom() - 1);
+            } else if (activeProvider === "kakao" && kakaoObj) {
+                kakaoObj.setLevel(kakaoObj.getLevel() + 1);
+            } else if (activeProvider === "naver" && naverObj) {
+                naverObj.setZoom(naverObj.getZoom() - 1);
+            }
+        }
+
+        window.onload = loadMapSdks;
+    </script>
+</body>
+</html>
