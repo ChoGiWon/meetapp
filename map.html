@@ -25,12 +25,25 @@
         html, body {
             margin: 0; padding: 0; width: 100%; height: 100%;
             overflow: hidden; background: #FAFAFA; font-family: sans-serif;
+            position: relative;
         }
+        /* display: none 대신 visibility + z-index를 사용하여 WebGL(TMAP) 캔버스 크기 0x0 붕괴 방지 */
         .provider-panel {
-            display: none; width: 100%; height: 100%; position: relative;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            visibility: hidden;
+            opacity: 0;
+            pointer-events: none;
+            z-index: 1;
         }
         .provider-panel.active {
-            display: block;
+            visibility: visible;
+            opacity: 1;
+            pointer-events: auto;
+            z-index: 10;
         }
         .map-canvas {
             width: 100%; height: 100%; touch-action: none;
@@ -381,6 +394,10 @@
             } else if (providerId === "naver") {
                 ensureNaverMap();
             } else if (providerId === "tmap" && tmapObj) {
+                if (typeof tmapObj.resize === "function") {
+                    tmapObj.resize();
+                }
+                window.dispatchEvent(new Event("resize"));
                 tmapObj.setCenter(new Tmapv3.LatLng(currentLat, currentLon));
             }
             updateZoomVisibility();
