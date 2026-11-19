@@ -379,7 +379,7 @@ def build_map_page() -> ft.Container:
         bgcolor=ft.Colors.WHITE,
         border_radius=10,
         border=ft.Border.all(1, "#D0D7DE"),
-        box_shadow=ft.BoxShadow(
+        shadow=ft.BoxShadow(
             spread_radius=0,
             blur_radius=6,
             color="#1A000000",
@@ -547,7 +547,7 @@ def build_map_page() -> ft.Container:
         primary_addr = addr_info["primary"]
         secondary_addr = addr_info["secondary"]
 
-        search_status_text.value = f"선택 위치 주소 조회 완료"
+        search_status_text.value = "선택 위치 주소 조회 완료"
         search_status_text.color = "#13A84F"
         search_status_text.update()
 
