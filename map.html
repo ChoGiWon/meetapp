@@ -63,11 +63,11 @@
         .status-box p { margin: 0; font-size: 13px; color: #666666; line-height: 1.6; }
         code { background: #EEEEEE; padding: 2px 6px; border-radius: 4px; color: #D32F2F; }
         .zoom-controls {
-            position: fixed; right: 14px; bottom: 95px; z-index: 9999;
+            position: fixed; right: 14px; bottom: 20px; z-index: 9999;
             display: flex; flex-direction: column; gap: 8px;
         }
         .zoom-btn {
-            width: 44px; height: 44px; border-radius: 10px;
+            width: 42px; height: 42px; border-radius: 10px;
             background: #FFFFFF; border: 1px solid #D0D7DE;
             box-shadow: 0 2px 6px rgba(0,0,0,0.22);
             font-size: 24px; font-weight: bold; color: #111111;
@@ -80,7 +80,12 @@
             background: rgba(255, 255, 255, 0.95); border: 1px solid #DCDFE4;
             border-radius: 8px; padding: 6px 12px; font-size: 12px;
             font-weight: bold; color: #111111; box-shadow: 0 2px 5px rgba(0,0,0,0.12);
-            display: none; max-width: 72%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            display: none; max-width: 78%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .my-loc-dot {
+            width: 18px; height: 18px; border-radius: 50%;
+            background: #0064FF; border: 3px solid #FFFFFF;
+            box-shadow: 0 0 0 4px rgba(0, 100, 255, 0.28), 0 2px 6px rgba(0,0,0,0.3);
         }
     </style>
 </head>
@@ -115,23 +120,35 @@
         var currentTitle = "";
         var hasSearched = false;
 
+        var myLat = null;
+        var myLon = null;
+
         var tmapObj = null;
         var tmapMarker = null;
         var tmapInfoWindow = null;
+        var tmapMyLocMarker = null;
 
         var kakaoSdkReady = false;
         var kakaoObj = null;
         var kakaoMarker = null;
         var kakaoInfoWindow = null;
+        var kakaoMyLocOverlay = null;
 
         var naverSdkReady = false;
         var naverObj = null;
         var naverMarker = null;
         var naverInfoWindow = null;
+        var naverMyLocMarker = null;
+
+        function sendToApp(payload) {
+            try {
+                console.log("MEETAPP_EVENT:" + JSON.stringify(payload));
+            } catch (e) {}
+        }
 
         function escapeHtml(text) {
             if (!text) return "";
-            return text
+            return String(text)
                 .replace(/&/g, "&amp;")
                 .replace(/</g, "&lt;")
                 .replace(/>/g, "&gt;")
@@ -182,7 +199,180 @@
         };
 
         // =============================================================
-        // [1] 티맵 WebGL 캔버스 초기화 / 탭 복귀 시 재생성 함수
+        // [1] 지도 위 특정 지점 터치(클릭) 공통 처리
+        // =============================================================
+        function handleMapPointClick(lat, lon) {
+            if (typeof lat !== "number" || typeof lon !== "number" || isNaN(lat) || isNaN(lon)) {
+                return;
+            }
+            currentLat = lat;
+            currentLon = lon;
+            currentTitle = "선택한 위치 (주소 조회 중...)";
+            hasSearched = true;
+
+            var banner = document.getElementById("place_banner");
+            if (banner) {
+                banner.innerText = "📍 주소 조회 중...";
+                banner.style.display = "block";
+            }
+
+            if (activeProvider === "tmap") {
+                applyTmapMarker(lat, lon, currentTitle, false);
+            }
+            applyKakaoMarker(lat, lon, currentTitle, false);
+            applyNaverMarker(lat, lon, currentTitle, false);
+
+            sendToApp({
+                type: "map_click",
+                lat: lat,
+                lon: lon
+            });
+        }
+
+        function extractTmapClickCoords(evt) {
+            if (!evt) return null;
+            var lat = null;
+            var lon = null;
+            if (evt.latLng) {
+                lat = typeof evt.latLng.lat === "function" ? evt.latLng.lat() : (evt.latLng._lat || evt.latLng.lat);
+                lon = typeof evt.latLng.lng === "function" ? evt.latLng.lng() : (evt.latLng._lng || evt.latLng.lng);
+            } else if (evt.lngLat) {
+                lat = evt.lngLat.lat;
+                lon = evt.lngLat.lng;
+            } else if (evt.data && evt.data.lngLat) {
+                lat = evt.data.lngLat.lat;
+                lon = evt.data.lngLat.lng;
+            }
+            if (lat !== null && lon !== null) {
+                return { lat: Number(lat), lon: Number(lon) };
+            }
+            return null;
+        }
+
+        // =============================================================
+        // [2] 현위치 마커 표시 및 브라우저 Geolocation 요청
+        // =============================================================
+        function renderMyLocationMarkers() {
+            if (myLat === null || myLon === null) return;
+
+            // 1. 티맵 현위치 표시
+            if (tmapObj && typeof Tmapv3 !== "undefined") {
+                if (tmapMyLocMarker) {
+                    try { tmapMyLocMarker.setMap(null); } catch (e) {}
+                    tmapMyLocMarker = null;
+                }
+                try {
+                    tmapMyLocMarker = new Tmapv3.Marker({
+                        position: new Tmapv3.LatLng(myLat, myLon),
+                        map: tmapObj,
+                        iconHTML: '<div class="my-loc-dot" title="현위치"></div>'
+                    });
+                } catch (e) {}
+            }
+
+            // 2. 카카오맵 현위치 표시
+            if (kakaoObj && typeof kakao !== "undefined") {
+                if (kakaoMyLocOverlay) {
+                    kakaoMyLocOverlay.setMap(null);
+                    kakaoMyLocOverlay = null;
+                }
+                kakaoMyLocOverlay = new kakao.maps.CustomOverlay({
+                    position: new kakao.maps.LatLng(myLat, myLon),
+                    content: '<div class="my-loc-dot" title="현위치"></div>',
+                    yAnchor: 0.5,
+                    xAnchor: 0.5
+                });
+                kakaoMyLocOverlay.setMap(kakaoObj);
+            }
+
+            // 3. 네이버맵 현위치 표시
+            if (naverObj && typeof naver !== "undefined") {
+                if (naverMyLocMarker) {
+                    naverMyLocMarker.setMap(null);
+                    naverMyLocMarker = null;
+                }
+                naverMyLocMarker = new naver.maps.Marker({
+                    position: new naver.maps.LatLng(myLat, myLon),
+                    map: naverObj,
+                    icon: {
+                        content: '<div class="my-loc-dot" title="현위치"></div>',
+                        anchor: new naver.maps.Point(12, 12)
+                    }
+                });
+            }
+        }
+
+        function setMyLocation(lat, lon, moveCenter) {
+            myLat = Number(lat);
+            myLon = Number(lon);
+            renderMyLocationMarkers();
+            if (moveCenter) {
+                currentLat = myLat;
+                currentLon = myLon;
+                if (tmapObj && typeof Tmapv3 !== "undefined") {
+                    tmapObj.setCenter(new Tmapv3.LatLng(myLat, myLon));
+                    tmapObj.setZoom(16);
+                }
+                if (kakaoObj && typeof kakao !== "undefined") {
+                    kakaoObj.setCenter(new kakao.maps.LatLng(myLat, myLon));
+                }
+                if (naverObj && typeof naver !== "undefined") {
+                    naverObj.setCenter(new naver.maps.LatLng(myLat, myLon));
+                }
+            }
+        }
+
+        function clearMyLocation() {
+            myLat = null;
+            myLon = null;
+            if (tmapMyLocMarker) {
+                try { tmapMyLocMarker.setMap(null); } catch (e) {}
+                tmapMyLocMarker = null;
+            }
+            if (kakaoMyLocOverlay) {
+                kakaoMyLocOverlay.setMap(null);
+                kakaoMyLocOverlay = null;
+            }
+            if (naverMyLocMarker) {
+                naverMyLocMarker.setMap(null);
+                naverMyLocMarker = null;
+            }
+        }
+
+        function requestCurrentLocation() {
+            if (!navigator.geolocation) {
+                sendToApp({ type: "geo_error", message: "Geolocation not supported" });
+                return;
+            }
+            navigator.geolocation.getCurrentPosition(
+                function (pos) {
+                    var lat = pos.coords.latitude;
+                    var lon = pos.coords.longitude;
+                    setMyLocation(lat, lon, true);
+                    sendToApp({
+                        type: "geo_result",
+                        lat: lat,
+                        lon: lon,
+                        source: "gps"
+                    });
+                },
+                function (err) {
+                    sendToApp({
+                        type: "geo_error",
+                        code: err ? err.code : -1,
+                        message: err ? err.message : "GPS unavailable"
+                    });
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout: 6000,
+                    maximumAge: 15000
+                }
+            );
+        }
+
+        // =============================================================
+        // [3] 티맵 WebGL 캔버스 초기화 / 탭 복귀 시 재생성 함수
         // =============================================================
         function rebuildTmap() {
             if (!tmapKey || tmapKey.indexOf("붙여넣기") !== -1) {
@@ -214,6 +404,7 @@
                 tmapObj = null;
                 tmapMarker = null;
                 tmapInfoWindow = null;
+                tmapMyLocMarker = null;
             }
 
             tDiv.innerHTML = "";
@@ -225,8 +416,17 @@
                     height: "100%",
                     zoom: 16
                 });
+
+                tmapObj.addListener("click", function (evt) {
+                    var coords = extractTmapClickCoords(evt);
+                    if (coords) {
+                        handleMapPointClick(coords.lat, coords.lon);
+                    }
+                });
+
+                renderMyLocationMarkers();
                 if (hasSearched) {
-                    applyTmapMarker(currentLat, currentLon, currentTitle);
+                    applyTmapMarker(currentLat, currentLon, currentTitle, true);
                 }
             } catch (e) {
                 showStatusMessage("tmap_div", "티맵 초기화 오류", "티맵 렌더링 실패", String(e), true);
@@ -235,13 +435,11 @@
         }
 
         // =============================================================
-        // [2] 페이지 로드 시 3사 SDK 상태 확인 및 초기화
+        // [4] 페이지 로드 시 3사 SDK 상태 확인 및 초기화
         // =============================================================
         function initAllMaps() {
-            // 1. 티맵 초기화
             rebuildTmap();
 
-            // 2. 카카오맵 SDK 로드 확인
             if (!kakaoKey || kakaoKey.indexOf("붙여넣기") !== -1) {
                 showStatusMessage("kakao_div", "API 키 연동 대기 중", "카카오맵 (Kakao Map)", "<code>config.py</code>의 <code>KAKAO_JS_KEY</code>를 입력해 주세요.", false);
             } else if (typeof kakao !== "undefined" && kakao.maps) {
@@ -259,7 +457,6 @@
                 );
             }
 
-            // 3. 네이버맵 SDK 로드 확인
             if (!naverKey || naverKey.indexOf("붙여넣기") !== -1) {
                 showStatusMessage("naver_div", "API 키 연동 대기 중", "네이버 지도 (Naver Map)", "<code>config.py</code>의 <code>NAVER_CLIENT_ID</code>를 입력해 주세요.", false);
             } else if (typeof naver !== "undefined" && naver.maps) {
@@ -290,8 +487,15 @@
                             center: new kakao.maps.LatLng(currentLat, currentLon),
                             level: 3
                         });
+
+                        kakao.maps.event.addListener(kakaoObj, "click", function (mouseEvent) {
+                            var latlng = mouseEvent.latLng;
+                            handleMapPointClick(latlng.getLat(), latlng.getLng());
+                        });
+
+                        renderMyLocationMarkers();
                         if (hasSearched) {
-                            applyKakaoMarker(currentLat, currentLon, currentTitle);
+                            applyKakaoMarker(currentLat, currentLon, currentTitle, true);
                         }
                         updateZoomVisibility();
                     } catch (e) {
@@ -301,6 +505,7 @@
             } else {
                 kakaoObj.relayout();
                 kakaoObj.setCenter(new kakao.maps.LatLng(currentLat, currentLon));
+                renderMyLocationMarkers();
                 updateZoomVisibility();
             }
         }
@@ -313,8 +518,16 @@
                         center: new naver.maps.LatLng(currentLat, currentLon),
                         zoom: 16
                     });
+
+                    naver.maps.Event.addListener(naverObj, "click", function (e) {
+                        if (e && e.coord) {
+                            handleMapPointClick(e.coord.lat(), e.coord.lng());
+                        }
+                    });
+
+                    renderMyLocationMarkers();
                     if (hasSearched) {
-                        applyNaverMarker(currentLat, currentLon, currentTitle);
+                        applyNaverMarker(currentLat, currentLon, currentTitle, true);
                     }
                     updateZoomVisibility();
                 } catch (e) {
@@ -323,18 +536,21 @@
             } else {
                 window.dispatchEvent(new Event("resize"));
                 naverObj.setCenter(new naver.maps.LatLng(currentLat, currentLon));
+                renderMyLocationMarkers();
                 updateZoomVisibility();
             }
         }
 
         // =============================================================
-        // [3] 지도별 마커 및 말풍선 동기화 함수
+        // [5] 지도별 마커 및 말풍선 동기화 함수
         // =============================================================
-        function applyTmapMarker(lat, lon, title) {
+        function applyTmapMarker(lat, lon, title, recenter) {
             if (!tmapObj || typeof Tmapv3 === "undefined") return;
             var tPos = new Tmapv3.LatLng(lat, lon);
-            tmapObj.setCenter(tPos);
-            tmapObj.setZoom(16);
+            if (recenter !== false) {
+                tmapObj.setCenter(tPos);
+                tmapObj.setZoom(16);
+            }
 
             if (tmapMarker) { tmapMarker.setMap(null); tmapMarker = null; }
             if (tmapInfoWindow) { tmapInfoWindow.setMap(null); tmapInfoWindow = null; }
@@ -356,10 +572,12 @@
             }
         }
 
-        function applyKakaoMarker(lat, lon, title) {
+        function applyKakaoMarker(lat, lon, title, recenter) {
             if (!kakaoObj || typeof kakao === "undefined") return;
             var kPos = new kakao.maps.LatLng(lat, lon);
-            kakaoObj.setCenter(kPos);
+            if (recenter !== false) {
+                kakaoObj.setCenter(kPos);
+            }
 
             if (kakaoMarker) { kakaoMarker.setMap(null); kakaoMarker = null; }
             if (kakaoInfoWindow) { kakaoInfoWindow.close(); kakaoInfoWindow = null; }
@@ -376,10 +594,12 @@
             }
         }
 
-        function applyNaverMarker(lat, lon, title) {
+        function applyNaverMarker(lat, lon, title, recenter) {
             if (!naverObj || typeof naver === "undefined") return;
             var nPos = new naver.maps.LatLng(lat, lon);
-            naverObj.setCenter(nPos);
+            if (recenter !== false) {
+                naverObj.setCenter(nPos);
+            }
 
             if (naverMarker) { naverMarker.setMap(null); naverMarker = null; }
             if (naverInfoWindow) { naverInfoWindow.close(); naverInfoWindow = null; }
@@ -401,7 +621,7 @@
         }
 
         // =============================================================
-        // [4] 파이썬(Flet)에서 호출하는 제어 함수
+        // [6] 파이썬(Flet)에서 호출하는 제어 함수
         // =============================================================
         function switchProvider(providerId) {
             activeProvider = providerId;
@@ -422,7 +642,6 @@
             } else if (providerId === "naver") {
                 ensureNaverMap();
             } else if (providerId === "tmap") {
-                // 패널이 visible 상태로 전환된 직후 WebGL 캔버스를 현재 좌표/마커 상태로 새로 렌더링
                 requestAnimationFrame(function () {
                     rebuildTmap();
                 });
@@ -443,10 +662,46 @@
             }
 
             if (activeProvider === "tmap") {
-                applyTmapMarker(lat, lon, currentTitle);
+                applyTmapMarker(lat, lon, currentTitle, true);
             }
-            applyKakaoMarker(lat, lon, currentTitle);
-            applyNaverMarker(lat, lon, currentTitle);
+            applyKakaoMarker(lat, lon, currentTitle, true);
+            applyNaverMarker(lat, lon, currentTitle, true);
+        }
+
+        function updateMarkerTitle(lat, lon, title) {
+            currentLat = lat;
+            currentLon = lon;
+            currentTitle = title || "";
+            hasSearched = true;
+
+            var banner = document.getElementById("place_banner");
+            if (banner && currentTitle) {
+                banner.innerText = "📍 " + currentTitle;
+                banner.style.display = "block";
+            }
+
+            if (activeProvider === "tmap") {
+                applyTmapMarker(lat, lon, currentTitle, false);
+            }
+            applyKakaoMarker(lat, lon, currentTitle, false);
+            applyNaverMarker(lat, lon, currentTitle, false);
+        }
+
+        function copyTextInBrowser(text) {
+            if (!text) return;
+            try {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(text).catch(function () {});
+                }
+                var ta = document.createElement("textarea");
+                ta.value = text;
+                ta.style.position = "fixed";
+                ta.style.left = "-9999px";
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand("copy");
+                document.body.removeChild(ta);
+            } catch (e) {}
         }
 
         function zoomIn() {
