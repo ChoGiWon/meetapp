@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -94,12 +95,13 @@ def _fetch_tmap_pois(keyword: str, count: int = 6) -> tuple[list[dict], str]:
 
 
 def _build_hosted_map_url() -> str:
-    """GitHub Pages HTTPS URL에 config.py의 API 키 파라미터를 결합하여 반환"""
+    """GitHub Pages HTTPS URL에 API 키와 캐시 방지 타임스탬프를 결합하여 반환"""
     params = urllib.parse.urlencode(
         {
             "tmap": (TMAP_APP_KEY or "").strip(),
             "kakao": (KAKAO_JS_KEY or "").strip(),
             "naver": (NAVER_CLIENT_ID or "").strip(),
+            "_v": int(time.time()),
         }
     )
     return f"{GITHUB_PAGES_MAP_URL}?{params}"
@@ -115,7 +117,7 @@ def build_map_page() -> ft.Container:
         {"id": "tmap", "label": "티맵", "color": "#0064FF", "text_color": "#FFFFFF"},
     ]
 
-    # GitHub Pages HTTPS 주소로 단일 WebView 로드 (카카오/네이버 도메인 인증 통과)
+    # GitHub Pages HTTPS 주소로 단일 WebView 로드
     map_webview = fwv.WebView(
         url=_build_hosted_map_url(),
         expand=True,
@@ -356,9 +358,7 @@ def build_map_page() -> ft.Container:
         text_style=ft.TextStyle(color="#111111", size=13, weight=ft.FontWeight.W_600),
         cursor_color="#111111",
         dense=True,
-        border_width=0,
-        border_color=ft.Colors.TRANSPARENT,
-        focused_border_color=ft.Colors.TRANSPARENT,
+        border=ft.InputBorder.NONE,
         bgcolor=ft.Colors.TRANSPARENT,
         content_padding=ft.Padding.symmetric(vertical=0, horizontal=0),
         expand=True,
