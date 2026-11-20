@@ -9,6 +9,9 @@ import urllib.request
 import flet as ft
 import flet_webview as fwv
 
+# [CAL-12] 캘린더 연동을 위해 복사된 주소 저장 함수 가져오기
+from pages.calendar_page import save_last_copied_map_address
+
 # config.py에서 발급받은 API 키 불러오기
 try:
     from config import TMAP_APP_KEY, KAKAO_JS_KEY, NAVER_CLIENT_ID
@@ -446,9 +449,12 @@ def build_map_page() -> ft.Container:
         copied_address_bar.update()
 
         await copy_to_clipboard(primary_addr)
+        
+        # [CAL-12] 캘린더 연동: 복사된 주소를 파일에 적어 임시 공유
+        save_last_copied_map_address(primary_addr)
 
     # -----------------------------------------------------------------
-    # 현위치 버튼 및 GPS 권한 처리 로직
+    # 현위치 버튼 및 적용 로직
     # -----------------------------------------------------------------
     search_status_text = ft.Text(
         value="",
@@ -577,7 +583,7 @@ def build_map_page() -> ft.Container:
             )
         elif code == 2:
             search_status_text.value = (
-                "위치 신호 없음 → 휴대폰 상단바의 '위치(GPS)'를 켜신 후 다시 눌러주세요."
+                "위치 신호 없음 → 휴대폰 상단바의 '위치(GPS)'를 켠 후 다시 눌러주세요."
             )
         elif code == 3:
             search_status_text.value = (

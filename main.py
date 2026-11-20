@@ -1,104 +1,212 @@
 import flet as ft
-from buttons import MenuButtonManager
-from pages.home_page import build_home_page
-from pages.calendar_page import build_calendar_page
-from pages.gallery_page import build_gallery_page
-from pages.chat_page import build_chat_page
-from pages.memo_page import build_memo_page
 from pages.map_page import build_map_page
-
-# =====================================================================
-# [버전 관리] 코드 업데이트 버전 텍스트 (수정 시 여기만 변경)
-# =====================================================================
-APP_VERSION = "v 0.0.2"
+from pages.calendar_page import build_calendar_page
 
 
 def main(page: ft.Page):
-    # 1. 앱 기본 메타데이터 및 배경 설정
-    page.title = "meetapp"
-    page.bgcolor = ft.Colors.WHITE
+    page.title = "MeetApp"
+    page.bgcolor = "#FAFAFA"
     page.padding = 0
     page.spacing = 0
 
-    # 2. 데스크톱 테스트용 모바일 창 크기
-    page.window.width = 390
-    page.window.height = 844
-
-    # 3. 6개 메뉴 이름과 실제 페이지 위젯 매핑
-    page_views = {
-        "메인화면": build_home_page(),
-        "캘린더": build_calendar_page(),
-        "사진첩": build_gallery_page(),
-        "채팅창": build_chat_page(),
-        "메모장": build_memo_page(),
-        "지도": build_map_page(),
-    }
-
-    # 4. 본문 영역 컨테이너 (초기 화면은 '메인화면')
-    body_area = ft.Container(
+    # =================================================================
+    # [1] 기본 채팅창 / 메모장 화면 (기존 작성 코드가 있다면 교체 가능)
+    # =================================================================
+    chat_messages = ft.Column(
         expand=True,
-        bgcolor="#FAFAFA",
-        content=page_views["메인화면"],
-    )
-
-    # 버튼 클릭 시 본문 영역의 페이지를 교체하는 함수
-    def handle_menu_change(selected_label: str):
-        if selected_label in page_views:
-            body_area.content = page_views[selected_label]
-            body_area.update()
-
-    # 5. 버튼 전용 매니저 생성 및 6개 버튼 불러오기
-    btn_manager = MenuButtonManager(on_menu_selected=handle_menu_change)
-    menu_button_list = btn_manager.build_menu_buttons()
-
-    # 6. 지도 버튼 우측에 배치할 코드 업데이트 버전 텍스트 위젯
-    version_text = ft.Container(
-        padding=ft.Padding.only(left=4, right=8),
-        alignment=ft.Alignment.CENTER,
-        content=ft.Text(
-            value=APP_VERSION,
-            size=12,
-            weight=ft.FontWeight.W_600,
-            color="#888888",
-        ),
-    )
-
-    # 7. [위치 관리] 맨 위 상태바(시간 영역) 컬러 박스
-    status_bar_box = ft.Container(
-        height=36,
-        bgcolor="#535353",
-    )
-
-    # 8. [위치 관리] 화면 상단 메뉴 버튼 + 우측 버전 텍스트 배치 영역
-    top_menu_bar = ft.Container(
-        padding=ft.Padding.only(left=16, right=16, top=12, bottom=12),
-        bgcolor=ft.Colors.WHITE,
-        border=ft.Border.only(bottom=ft.BorderSide(1, "#EEEEEE")),
-        content=ft.Row(
-            controls=[
-                *menu_button_list,  # 1~6번 버튼 (메인화면 ~ 지도)
-                version_text,       # 마지막 버튼 우측 업데이트 버전 표시
-            ],
-            spacing=10,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            scroll=ft.ScrollMode.HIDDEN,
-        ),
-    )
-
-    # 9. 전체 화면 조립 (단일 3단 Column 구조)
-    main_layout = ft.Column(
-        expand=True,
-        spacing=0,
+        spacing=8,
+        scroll=ft.ScrollMode.AUTO,
         controls=[
-            status_bar_box,  # 1층: 맨 위 상태바(시간/배터리) 배경 박스
-            top_menu_bar,    # 2층: 상단 6개 메뉴 버튼 + 버전 텍스트
-            body_area,       # 3층: 선택된 메뉴에 따라 바뀌는 페이지 영역
+            ft.Container(
+                padding=ft.Padding.all(12),
+                border_radius=10,
+                bgcolor=ft.Colors.WHITE,
+                border=ft.Border.all(1, "#E5E8EB"),
+                content=ft.Text(
+                    "모임 채팅방입니다. 캘린더에서 복사한 일정 공지를 붙여넣어 공유해 보세요.",
+                    size=13,
+                    color="#333333",
+                ),
+            )
         ],
     )
 
-    page.add(main_layout)
-    page.update()
+    chat_input = ft.TextField(
+        hint_text="메시지 입력 (공지 붙여넣기 가능)",
+        dense=True,
+        expand=True,
+        border=ft.OutlineInputBorder(border_radius=8),
+        text_style=ft.TextStyle(size=13, color="#111111"),
+    )
+
+    def handle_send_chat(e):
+        msg = (chat_input.value or "").strip()
+        if not msg:
+            return
+        chat_messages.controls.append(
+            ft.Container(
+                padding=ft.Padding.all(10),
+                border_radius=10,
+                bgcolor="#EEF4FF",
+                border=ft.Border.all(1, "#C2D8FF"),
+                content=ft.Text(msg, size=13, color="#111111"),
+            )
+        )
+        chat_input.value = ""
+        chat_messages.update()
+        chat_input.update()
+
+    chat_view = ft.Container(
+        expand=True,
+        padding=ft.Padding.all(14),
+        content=ft.Column(
+            expand=True,
+            spacing=10,
+            controls=[
+                chat_messages,
+                ft.Row(
+                    spacing=8,
+                    controls=[
+                        chat_input,
+                        ft.Container(
+                            height=40,
+                            padding=ft.Padding.symmetric(horizontal=14),
+                            border_radius=8,
+                            bgcolor="#13A84F",
+                            alignment=ft.Alignment.CENTER,
+                            ink=True,
+                            on_click=handle_send_chat,
+                            content=ft.Text("전송", size=13, weight=ft.FontWeight.W_700, color=ft.Colors.WHITE),
+                        ),
+                    ],
+                ),
+            ],
+        ),
+    )
+
+    memo_input = ft.TextField(
+        hint_text="모임 메모를 자유롭게 입력하세요...",
+        multiline=True,
+        min_lines=12,
+        expand=True,
+        border=ft.OutlineInputBorder(border_radius=10),
+        bgcolor=ft.Colors.WHITE,
+        text_style=ft.TextStyle(size=14, color="#111111"),
+    )
+
+    memo_view = ft.Container(
+        expand=True,
+        padding=ft.Padding.all(14),
+        content=ft.Column(
+            expand=True,
+            spacing=8,
+            controls=[
+                ft.Text("공용 메모장", size=15, weight=ft.FontWeight.W_800, color="#111111"),
+                memo_input,
+            ],
+        ),
+    )
+
+    # =================================================================
+    # [2] 상단 메뉴 구성 및 화면 전환 로직
+    # =================================================================
+    menu_items = [
+        {"name": "채팅창", "icon": ft.Icons.CHAT_BUBBLE_OUTLINE_ROUNDED},
+        {"name": "메모장", "icon": ft.Icons.EDIT_NOTE_ROUNDED},
+        {"name": "지도", "icon": ft.Icons.MAP_OUTLINED},
+        {"name": "캘린더", "icon": ft.Icons.CALENDAR_MONTH_ROUNDED},
+    ]
+
+    menu_buttons: dict[str, ft.Container] = {}
+    body_area = ft.Container(expand=True)
+
+    def select_menu(selected_name: str):
+        """상단 탭 버튼 색상 변경 및 본문 화면 전환"""
+        for m_name, btn in menu_buttons.items():
+            is_active = (m_name == selected_name)
+            btn.bgcolor = "#13A84F" if is_active else "#F3F5F7"
+            btn.border = ft.Border.all(1, "#13A84F" if is_active else "#E0E0E0")
+            row_controls = btn.content.controls
+            row_controls[0].color = ft.Colors.WHITE if is_active else "#333333"
+            row_controls[1].color = ft.Colors.WHITE if is_active else "#333333"
+
+        body_area.content = pages[selected_name]
+        page.update()
+
+    def open_map_from_calendar(location_str: str):
+        """[CAL-14] 캘린더 일정에서 장소 클릭 시 '지도' 탭으로 즉시 이동"""
+        select_menu("지도")
+
+    pages = {
+        "채팅창": chat_view,
+        "메모장": memo_view,
+        "지도": build_map_page(),
+        "캘린더": build_calendar_page(on_navigate_to_map=open_map_from_calendar),
+    }
+
+    nav_controls = []
+    for item in menu_items:
+        m_name = item["name"]
+        is_default = (m_name == "지도")
+        btn = ft.Container(
+            expand=True,
+            height=38,
+            border_radius=19,
+            bgcolor="#13A84F" if is_default else "#F3F5F7",
+            border=ft.Border.all(1, "#13A84F" if is_default else "#E0E0E0"),
+            alignment=ft.Alignment.CENTER,
+            ink=True,
+            on_click=lambda e, name=m_name: select_menu(name),
+            content=ft.Row(
+                spacing=4,
+                alignment=ft.MainAxisAlignment.CENTER,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    ft.Icon(
+                        icon=item["icon"],
+                        size=15,
+                        color=ft.Colors.WHITE if is_default else "#333333",
+                    ),
+                    ft.Text(
+                        value=m_name,
+                        size=12,
+                        weight=ft.FontWeight.W_700,
+                        color=ft.Colors.WHITE if is_default else "#333333",
+                    ),
+                ],
+            ),
+        )
+        menu_buttons[m_name] = btn
+        nav_controls.append(btn)
+
+    nav_controls.append(
+        ft.Text("v 0.0.3", size=11, color="#777777", weight=ft.FontWeight.W_600)
+    )
+
+    top_header = ft.Container(
+        padding=ft.Padding.only(left=12, right=12, top=10, bottom=8),
+        bgcolor=ft.Colors.WHITE,
+        border=ft.Border.only(bottom=ft.BorderSide(1, "#EEEEEE")),
+        content=ft.Row(
+            spacing=6,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            controls=nav_controls,
+        ),
+    )
+
+    body_area.content = pages["지도"]
+
+    page.add(
+        ft.Column(
+            expand=True,
+            spacing=0,
+            controls=[
+                top_header,
+                body_area,
+            ],
+        )
+    )
 
 
 if __name__ == "__main__":
-    ft.run(main)
+    ft.app(main)
