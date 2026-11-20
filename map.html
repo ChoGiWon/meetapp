@@ -31,6 +31,12 @@
             -webkit-user-select: none;
             user-select: none;
         }
+        #map_touch_wrapper {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            touch-action: none;
+        }
         .provider-panel {
             position: absolute;
             top: 0;
@@ -50,6 +56,7 @@
         }
         .map-canvas {
             width: 100%; height: 100%;
+            touch-action: none;
         }
         .status-box {
             width: 100%; height: 100%; padding: 24px; box-sizing: border-box;
@@ -96,19 +103,21 @@
 <body>
     <div id="place_banner" class="place-banner"></div>
 
-    <!-- 티맵 패널 -->
-    <div id="panel_tmap" class="provider-panel active">
-        <div id="tmap_div" class="map-canvas"></div>
-    </div>
+    <div id="map_touch_wrapper">
+        <!-- 티맵 패널 -->
+        <div id="panel_tmap" class="provider-panel active">
+            <div id="tmap_div" class="map-canvas"></div>
+        </div>
 
-    <!-- 카카오맵 패널 -->
-    <div id="panel_kakao" class="provider-panel">
-        <div id="kakao_div" class="map-canvas"></div>
-    </div>
+        <!-- 카카오맵 패널 -->
+        <div id="panel_kakao" class="provider-panel">
+            <div id="kakao_div" class="map-canvas"></div>
+        </div>
 
-    <!-- 네이버맵 패널 -->
-    <div id="panel_naver" class="provider-panel">
-        <div id="naver_div" class="map-canvas"></div>
+        <!-- 네이버맵 패널 -->
+        <div id="panel_naver" class="provider-panel">
+            <div id="naver_div" class="map-canvas"></div>
+        </div>
     </div>
 
     <!-- 공통 확대/축소 버튼 -->
@@ -143,6 +152,12 @@
         var naverMarker = null;
         var naverInfoWindow = null;
         var naverMyLocMarker = null;
+
+        // 두 손가락 핀치 줌 상태 변수
+        var isPinching = false;
+        var pinchStartDist = 0;
+        var pinchStartZoom = 16;
+        var lastPinchEndTime = 0;
 
         function sendToApp(payload) {
             try {
@@ -203,9 +218,83 @@
         };
 
         // =============================================================
+        // [0] 안드로이드 WebView용 두 손가락 핀치 줌 엔진 (3사 공통)
+        // =============================================================
+        function getTouchDistance(touches) {
+            var dx = touches[0].clientX - touches[1].clientX;
+            var dy = touches[0].clientY - touches[1].clientY;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+
+        function getActiveMapZoom() {
+            if (activeProvider === "tmap" && tmapObj) {
+                return tmapObj.getZoom();
+            } else if (activeProvider === "kakao" && kakaoObj) {
+                return kakaoObj.getLevel();
+            } else if (activeProvider === "naver" && naverObj) {
+                return naverObj.getZoom();
+            }
+            return 16;
+        }
+
+        function applyPinchZoom(startZoom, zoomDelta) {
+            if (activeProvider === "tmap" && tmapObj) {
+                var nextTmapZoom = Math.max(6, Math.min(19, startZoom + zoomDelta));
+                tmapObj.setZoom(nextTmapZoom);
+            } else if (activeProvider === "kakao" && kakaoObj) {
+                // 카카오맵은 level 숫자가 작을수록 확대됨
+                var nextKakaoLevel = Math.max(1, Math.min(14, Math.round(startZoom - zoomDelta)));
+                if (nextKakaoLevel !== kakaoObj.getLevel()) {
+                    kakaoObj.setLevel(nextKakaoLevel, { animate: { duration: 120 } });
+                }
+            } else if (activeProvider === "naver" && naverObj) {
+                var nextNaverZoom = Math.max(6, Math.min(21, Math.round(startZoom + zoomDelta)));
+                if (nextNaverZoom !== naverObj.getZoom()) {
+                    naverObj.setZoom(nextNaverZoom, true);
+                }
+            }
+        }
+
+        function setupPinchZoomListeners() {
+            var wrapper = document.getElementById("map_touch_wrapper");
+            if (!wrapper) return;
+
+            wrapper.addEventListener("touchstart", function (e) {
+                if (e.touches && e.touches.length === 2) {
+                    isPinching = true;
+                    pinchStartDist = getTouchDistance(e.touches);
+                    pinchStartZoom = getActiveMapZoom();
+                }
+            }, { passive: false });
+
+            wrapper.addEventListener("touchmove", function (e) {
+                if (isPinching && e.touches && e.touches.length === 2 && pinchStartDist > 10) {
+                    e.preventDefault();
+                    var currentDist = getTouchDistance(e.touches);
+                    var ratio = currentDist / pinchStartDist;
+                    var zoomDelta = Math.log(ratio) / Math.LN2;
+                    applyPinchZoom(pinchStartZoom, zoomDelta);
+                }
+            }, { passive: false });
+
+            function endPinch(e) {
+                if (isPinching && (!e.touches || e.touches.length < 2)) {
+                    isPinching = false;
+                    lastPinchEndTime = Date.now();
+                }
+            }
+
+            wrapper.addEventListener("touchend", endPinch, { passive: false });
+            wrapper.addEventListener("touchcancel", endPinch, { passive: false });
+        }
+
+        // =============================================================
         // [1] 지도 위 특정 지점 터치(클릭) 공통 처리
         // =============================================================
         function handleMapPointClick(lat, lon) {
+            if (isPinching || (Date.now() - lastPinchEndTime < 350)) {
+                return;
+            }
             if (typeof lat !== "number" || typeof lon !== "number" || isNaN(lat) || isNaN(lon)) {
                 return;
             }
@@ -342,31 +431,53 @@
 
         function requestCurrentLocation() {
             if (!navigator.geolocation) {
-                sendToApp({ type: "geo_error", message: "Geolocation not supported" });
+                sendToApp({ type: "geo_error", code: 0, message: "Geolocation not supported" });
                 return;
             }
+
+            function onSuccess(pos) {
+                var lat = pos.coords.latitude;
+                var lon = pos.coords.longitude;
+                setMyLocation(lat, lon, true);
+                sendToApp({
+                    type: "geo_result",
+                    lat: lat,
+                    lon: lon,
+                    source: "gps"
+                });
+            }
+
+            // 1차: 고정밀 GPS 시도 -> 실패/시간초과 시 2차 네트워크(Wi-Fi/기지국) 위치 자동 재시도
             navigator.geolocation.getCurrentPosition(
-                function (pos) {
-                    var lat = pos.coords.latitude;
-                    var lon = pos.coords.longitude;
-                    setMyLocation(lat, lon, true);
-                    sendToApp({
-                        type: "geo_result",
-                        lat: lat,
-                        lon: lon,
-                        source: "gps"
-                    });
-                },
+                onSuccess,
                 function (err) {
-                    sendToApp({
-                        type: "geo_error",
-                        code: err ? err.code : -1,
-                        message: err ? err.message : "GPS unavailable"
-                    });
+                    if (err && err.code === 1) {
+                        sendToApp({
+                            type: "geo_error",
+                            code: 1,
+                            message: err.message || "Permission denied"
+                        });
+                        return;
+                    }
+                    navigator.geolocation.getCurrentPosition(
+                        onSuccess,
+                        function (err2) {
+                            sendToApp({
+                                type: "geo_error",
+                                code: err2 ? err2.code : -1,
+                                message: err2 ? err2.message : "GPS unavailable"
+                            });
+                        },
+                        {
+                            enableHighAccuracy: false,
+                            timeout: 6000,
+                            maximumAge: 30000
+                        }
+                    );
                 },
                 {
                     enableHighAccuracy: true,
-                    timeout: 4500,
+                    timeout: 6000,
                     maximumAge: 10000
                 }
             );
@@ -439,6 +550,7 @@
         // [4] 페이지 로드 시 3사 SDK 상태 확인 및 초기화
         // =============================================================
         function initAllMaps() {
+            setupPinchZoomListeners();
             rebuildTmap();
 
             if (!kakaoKey || kakaoKey.indexOf("붙여넣기") !== -1) {

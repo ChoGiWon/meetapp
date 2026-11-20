@@ -20,7 +20,7 @@ except ImportError:
 # GitHub Pages에 배포된 지도 뷰어 HTTPS 주소
 GITHUB_PAGES_MAP_URL = "https://chogiwon.github.io/meetapp/map.html"
 
-# 지정한 현위치 좌표를 기억해 두는 로컬 파일 경로
+# 최근 확인된 현위치 좌표를 기억해 두는 로컬 파일 경로
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _MY_LOC_CACHE_FILE = os.path.join(_BASE_DIR, "my_location.json")
 
@@ -271,7 +271,6 @@ def build_map_page() -> ft.Container:
         "suggestions": [],
         "is_selecting": False,
         "use_my_location": False,
-        "awaiting_my_loc_pick": False,
         "my_lat": saved_loc[0] if saved_loc else None,
         "my_lon": saved_loc[1] if saved_loc else None,
         "selected_lat": init_lat,
@@ -361,7 +360,7 @@ def build_map_page() -> ft.Container:
         await apply_my_location_coords(
             lat,
             lon,
-            "선택한 위치를 현위치로 저장 및 적용했습니다.",
+            "선택한 위치를 현위치 기준으로 적용했습니다.",
             move_center=False,
         )
 
@@ -449,7 +448,7 @@ def build_map_page() -> ft.Container:
         await copy_to_clipboard(primary_addr)
 
     # -----------------------------------------------------------------
-    # 현위치 버튼 및 적용 로직 (서울 IP 오차 방지 + 터치 지정 지원)
+    # 현위치 버튼 및 GPS 권한 처리 로직
     # -----------------------------------------------------------------
     search_status_text = ft.Text(
         value="",
@@ -478,7 +477,6 @@ def build_map_page() -> ft.Container:
         move_center: bool = True,
     ):
         state["use_my_location"] = True
-        state["awaiting_my_loc_pick"] = False
         state["my_lat"] = lat
         state["my_lon"] = lon
         state["selected_lat"] = lat
@@ -513,7 +511,6 @@ def build_map_page() -> ft.Container:
         # 이미 현위치 기준 검색이 켜져 있으면 토글 해제
         if state["use_my_location"]:
             state["use_my_location"] = False
-            state["awaiting_my_loc_pick"] = False
             update_my_loc_button_ui()
             await exec_js("clearMyLocation();")
 
@@ -523,20 +520,7 @@ def build_map_page() -> ft.Container:
             search_status_text.update()
             return
 
-        # 이전에 저장해 둔 내 위치가 있으면 즉시 불러오면서 백그라운드로 GPS 갱신 시도
-        cached = _load_saved_my_location()
-        if cached:
-            await apply_my_location_coords(
-                cached[0],
-                cached[1],
-                "저장된 현위치 적용됨 (다른 위치로 바꾸려면 지도를 터치하세요)",
-                move_center=True,
-            )
-            await exec_js("requestCurrentLocation();")
-            return
-
-        state["awaiting_my_loc_pick"] = True
-        search_status_text.value = "GPS 확인 중... (미지원 시 지도에서 현재 위치를 터치하세요)"
+        search_status_text.value = "현재 GPS 위치를 확인하는 중..."
         search_status_text.color = "#0064FF"
         search_status_text.visible = True
         search_status_text.update()
@@ -569,15 +553,6 @@ def build_map_page() -> ft.Container:
         suggestion_box.visible = False
         suggestion_box.update()
 
-        # 현위치 지정 대기 상태였다면 터치한 좌표를 즉시 현위치로 등록
-        if state["awaiting_my_loc_pick"] or state["use_my_location"]:
-            await apply_my_location_coords(
-                lat,
-                lon,
-                "터치한 위치를 현위치로 적용했습니다 (가까운 순으로 검색됩니다)",
-                move_center=False,
-            )
-
         search_status_text.value = "선택한 지점의 주소를 조회하는 중..."
         search_status_text.color = "#444444"
         search_status_text.visible = True
@@ -587,25 +562,32 @@ def build_map_page() -> ft.Container:
         primary_addr = addr_info["primary"]
         secondary_addr = addr_info["secondary"]
 
-        if state["use_my_location"]:
-            search_status_text.value = "현위치 기준 적용 및 주소 복사 완료"
-            search_status_text.color = "#0064FF"
-        else:
-            search_status_text.value = "선택 위치 주소 조회 완료"
-            search_status_text.color = "#13A84F"
+        search_status_text.value = "선택 위치 주소 조회 완료"
+        search_status_text.color = "#13A84F"
         search_status_text.update()
 
         safe_label = json.dumps(primary_addr, ensure_ascii=False)
         await exec_js(f"updateMarkerTitle({lat}, {lon}, {safe_label});")
         await set_and_copy_address(primary_addr, secondary_addr)
 
-    async def process_geo_unavailable():
-        # 이미 저장된 현위치가 활성화되어 있다면 별도 경고 없이 유지
-        if state["use_my_location"] and state["my_lat"] is not None:
-            return
-        state["awaiting_my_loc_pick"] = True
-        search_status_text.value = "웹뷰 GPS 권한 제한됨 → 지도에서 현재 계신 곳을 터치해 주세요!"
-        search_status_text.color = "#E65100"
+    async def process_geo_error(code: int, message: str):
+        if code == 1:
+            search_status_text.value = (
+                "위치 권한이 거부됨 → 휴대폰 [설정 > 앱 > Flet > 권한 > 위치]를 '허용'으로 켜주세요."
+            )
+        elif code == 2:
+            search_status_text.value = (
+                "위치 신호 없음 → 휴대폰 상단바의 '위치(GPS)'를 켜신 후 다시 눌러주세요."
+            )
+        elif code == 3:
+            search_status_text.value = (
+                "GPS 응답 시간 초과 → '현위치' 버튼을 다시 눌러주세요."
+            )
+        else:
+            search_status_text.value = (
+                f"현위치를 가져올 수 없습니다 ({message}). 앱 위치 권한을 확인해 주세요."
+            )
+        search_status_text.color = "#D32F2F"
         search_status_text.visible = True
         search_status_text.update()
 
@@ -630,12 +612,14 @@ def build_map_page() -> ft.Container:
                 apply_my_location_coords(
                     lat,
                     lon,
-                    "GPS 현위치 적용 완료 (가까운 장소 우선으로 검색됩니다)",
+                    "현위치 적용 완료 (가까운 장소 우선으로 검색됩니다)",
                     move_center=True,
                 )
             )
         elif evt_type == "geo_error":
-            asyncio.create_task(process_geo_unavailable())
+            code = int(payload.get("code", -1))
+            message = str(payload.get("message", ""))
+            asyncio.create_task(process_geo_error(code, message))
 
     # GitHub Pages HTTPS 주소로 단일 WebView 로드
     map_webview = fwv.WebView(
@@ -1015,7 +999,7 @@ def build_map_page() -> ft.Container:
             controls=[
                 sub_menu_bar,        # 1단: 카카오맵 / 네이버맵 / 티맵 선택 버튼
                 search_bar,          # 2단: 검색창 + 검색 버튼 + 현위치 버튼 + 연관검색어
-                map_webview,         # 3단: GitHub Pages HTTPS WebView (지도 터치/현위치 연동)
+                map_webview,         # 3단: GitHub Pages HTTPS WebView (핀치줌/터치/현위치)
                 copied_address_bar,  # 4단: 지도 하단 복사된 주소 표시 카드
             ],
         ),
