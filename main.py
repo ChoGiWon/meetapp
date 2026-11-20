@@ -5,7 +5,7 @@ from pages.calendar_page import build_calendar_page
 
 def main(page: ft.Page):
     page.title = "MeetApp"
-    page.bgcolor = "#FAFAFA"
+    page.bgcolor = "#A6A6A6"
     page.padding = 0
     page.spacing = 0
 
@@ -118,7 +118,7 @@ def main(page: ft.Page):
     ]
 
     menu_buttons: dict[str, ft.Container] = {}
-    body_area = ft.Container(expand=True)
+    body_area = ft.Container(expand=True, bgcolor="#FAFAFA")
 
     def select_menu(selected_name: str):
         """상단 탭 버튼 색상 변경 및 본문 화면 전환"""
@@ -184,7 +184,7 @@ def main(page: ft.Page):
     )
 
     top_header = ft.Container(
-        padding=ft.Padding.only(left=12, right=12, top=10, bottom=8),
+        padding=ft.Padding.only(left=12, right=12, top=8, bottom=8),
         bgcolor=ft.Colors.WHITE,
         border=ft.Border.only(bottom=ft.BorderSide(1, "#EEEEEE")),
         content=ft.Row(
@@ -196,17 +196,21 @@ def main(page: ft.Page):
 
     body_area.content = pages["지도"]
 
+    # 스마트폰 상단 시계/날짜/배터리 영역 침범 방지 (SafeArea 적용)
     page.add(
-        ft.Column(
+        ft.SafeArea(
             expand=True,
-            spacing=0,
-            controls=[
-                top_header,
-                body_area,
-            ],
+            content=ft.Column(
+                expand=True,
+                spacing=0,
+                controls=[
+                    top_header,
+                    body_area,
+                ],
+            ),
         )
     )
 
 
 if __name__ == "__main__":
-    ft.app(main)
+    ft.run(main)
