@@ -1,6 +1,7 @@
 import asyncio
 import json
 import math
+import os
 import time
 import urllib.error
 import urllib.parse
@@ -18,6 +19,32 @@ except ImportError:
 
 # GitHub Pages에 배포된 지도 뷰어 HTTPS 주소
 GITHUB_PAGES_MAP_URL = "https://chogiwon.github.io/meetapp/map.html"
+
+# 지정한 현위치 좌표를 기억해 두는 로컬 파일 경로
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_MY_LOC_CACHE_FILE = os.path.join(_BASE_DIR, "my_location.json")
+
+
+def _load_saved_my_location() -> tuple[float, float] | None:
+    try:
+        if os.path.exists(_MY_LOC_CACHE_FILE):
+            with open(_MY_LOC_CACHE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                lat = data.get("lat")
+                lon = data.get("lon")
+                if lat is not None and lon is not None:
+                    return float(lat), float(lon)
+    except Exception:
+        pass
+    return None
+
+
+def _save_my_location(lat: float, lon: float):
+    try:
+        with open(_MY_LOC_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"lat": lat, "lon": lon}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 
 # =====================================================================
@@ -211,26 +238,6 @@ def _reverse_geocode_tmap(lat: float, lon: float) -> dict:
     return {"primary": fallback_coord, "secondary": "주소 정보 없음"}
 
 
-def _fetch_ip_location() -> tuple[float, float] | None:
-    """WebView GPS가 제한된 환경에서 IP 기반으로 대략적 현위치 좌표를 조회하는 폴백"""
-    endpoints = [
-        ("https://ipwho.is/", "latitude", "longitude"),
-        ("https://ipapi.co/json/", "latitude", "longitude"),
-    ]
-    for url, lat_k, lon_k in endpoints:
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "MeetApp/1.0"})
-            with urllib.request.urlopen(req, timeout=4) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                lat_v = data.get(lat_k)
-                lon_v = data.get(lon_k)
-                if lat_v is not None and lon_v is not None:
-                    return float(lat_v), float(lon_v)
-        except Exception:
-            continue
-    return None
-
-
 def _build_hosted_map_url() -> str:
     """GitHub Pages HTTPS URL에 API 키와 캐시 방지 타임스탬프를 결합하여 반환"""
     params = urllib.parse.urlencode(
@@ -254,16 +261,21 @@ def build_map_page() -> ft.Container:
         {"id": "tmap", "label": "티맵", "color": "#0064FF", "text_color": "#FFFFFF"},
     ]
 
+    saved_loc = _load_saved_my_location()
+    init_lat = saved_loc[0] if saved_loc else 37.5665
+    init_lon = saved_loc[1] if saved_loc else 126.9780
+
     state = {
         "debounce_task": None,
         "last_keyword": "",
         "suggestions": [],
         "is_selecting": False,
         "use_my_location": False,
-        "my_lat": None,
-        "my_lon": None,
-        "selected_lat": 37.5665,
-        "selected_lon": 126.9780,
+        "awaiting_my_loc_pick": False,
+        "my_lat": saved_loc[0] if saved_loc else None,
+        "my_lon": saved_loc[1] if saved_loc else None,
+        "selected_lat": init_lat,
+        "selected_lon": init_lon,
         "copied_address": "",
         "secondary_address": "",
     }
@@ -346,7 +358,12 @@ def build_map_page() -> ft.Container:
         lon = state["selected_lon"]
         if lat is None or lon is None:
             return
-        await apply_my_location_coords(lat, lon, "선택한 위치를 현위치로 적용했습니다.", move_center=False)
+        await apply_my_location_coords(
+            lat,
+            lon,
+            "선택한 위치를 현위치로 저장 및 적용했습니다.",
+            move_center=False,
+        )
 
     recopy_btn = ft.Container(
         height=30,
@@ -432,7 +449,7 @@ def build_map_page() -> ft.Container:
         await copy_to_clipboard(primary_addr)
 
     # -----------------------------------------------------------------
-    # 현위치 버튼 및 적용 로직
+    # 현위치 버튼 및 적용 로직 (서울 IP 오차 방지 + 터치 지정 지원)
     # -----------------------------------------------------------------
     search_status_text = ft.Text(
         value="",
@@ -461,10 +478,12 @@ def build_map_page() -> ft.Container:
         move_center: bool = True,
     ):
         state["use_my_location"] = True
+        state["awaiting_my_loc_pick"] = False
         state["my_lat"] = lat
         state["my_lon"] = lon
         state["selected_lat"] = lat
         state["selected_lon"] = lon
+        _save_my_location(lat, lon)
         update_my_loc_button_ui()
 
         search_status_text.value = status_msg
@@ -494,8 +513,7 @@ def build_map_page() -> ft.Container:
         # 이미 현위치 기준 검색이 켜져 있으면 토글 해제
         if state["use_my_location"]:
             state["use_my_location"] = False
-            state["my_lat"] = None
-            state["my_lon"] = None
+            state["awaiting_my_loc_pick"] = False
             update_my_loc_button_ui()
             await exec_js("clearMyLocation();")
 
@@ -505,8 +523,21 @@ def build_map_page() -> ft.Container:
             search_status_text.update()
             return
 
-        search_status_text.value = "현위치를 확인하는 중..."
-        search_status_text.color = "#444444"
+        # 이전에 저장해 둔 내 위치가 있으면 즉시 불러오면서 백그라운드로 GPS 갱신 시도
+        cached = _load_saved_my_location()
+        if cached:
+            await apply_my_location_coords(
+                cached[0],
+                cached[1],
+                "저장된 현위치 적용됨 (다른 위치로 바꾸려면 지도를 터치하세요)",
+                move_center=True,
+            )
+            await exec_js("requestCurrentLocation();")
+            return
+
+        state["awaiting_my_loc_pick"] = True
+        search_status_text.value = "GPS 확인 중... (미지원 시 지도에서 현재 위치를 터치하세요)"
+        search_status_text.color = "#0064FF"
         search_status_text.visible = True
         search_status_text.update()
 
@@ -538,6 +569,15 @@ def build_map_page() -> ft.Container:
         suggestion_box.visible = False
         suggestion_box.update()
 
+        # 현위치 지정 대기 상태였다면 터치한 좌표를 즉시 현위치로 등록
+        if state["awaiting_my_loc_pick"] or state["use_my_location"]:
+            await apply_my_location_coords(
+                lat,
+                lon,
+                "터치한 위치를 현위치로 적용했습니다 (가까운 순으로 검색됩니다)",
+                move_center=False,
+            )
+
         search_status_text.value = "선택한 지점의 주소를 조회하는 중..."
         search_status_text.color = "#444444"
         search_status_text.visible = True
@@ -547,34 +587,27 @@ def build_map_page() -> ft.Container:
         primary_addr = addr_info["primary"]
         secondary_addr = addr_info["secondary"]
 
-        search_status_text.value = "선택 위치 주소 조회 완료"
-        search_status_text.color = "#13A84F"
+        if state["use_my_location"]:
+            search_status_text.value = "현위치 기준 적용 및 주소 복사 완료"
+            search_status_text.color = "#0064FF"
+        else:
+            search_status_text.value = "선택 위치 주소 조회 완료"
+            search_status_text.color = "#13A84F"
         search_status_text.update()
 
         safe_label = json.dumps(primary_addr, ensure_ascii=False)
         await exec_js(f"updateMarkerTitle({lat}, {lon}, {safe_label});")
         await set_and_copy_address(primary_addr, secondary_addr)
 
-    async def process_geo_fallback():
-        ip_coords = await asyncio.to_thread(_fetch_ip_location)
-        if ip_coords:
-            lat, lon = ip_coords
-            await apply_my_location_coords(
-                lat,
-                lon,
-                "현위치 적용됨 (네트워크 위치 기준 · 지도 터치 후 '현위치 기준'으로 미세조정 가능)",
-                move_center=True,
-            )
-        else:
-            # IP 조회마저 오프라인 등으로 실패 시 현재 지도 중심 좌표를 현위치로 적용
-            lat = state["selected_lat"]
-            lon = state["selected_lon"]
-            await apply_my_location_coords(
-                lat,
-                lon,
-                "현재 지도 중심 좌표를 현위치 기준으로 적용했습니다.",
-                move_center=False,
-            )
+    async def process_geo_unavailable():
+        # 이미 저장된 현위치가 활성화되어 있다면 별도 경고 없이 유지
+        if state["use_my_location"] and state["my_lat"] is not None:
+            return
+        state["awaiting_my_loc_pick"] = True
+        search_status_text.value = "웹뷰 GPS 권한 제한됨 → 지도에서 현재 계신 곳을 터치해 주세요!"
+        search_status_text.color = "#E65100"
+        search_status_text.visible = True
+        search_status_text.update()
 
     def handle_webview_console(e):
         msg = getattr(e, "message", "") or ""
@@ -597,12 +630,12 @@ def build_map_page() -> ft.Container:
                 apply_my_location_coords(
                     lat,
                     lon,
-                    "현위치 적용 완료 (가까운 장소 우선으로 검색됩니다)",
+                    "GPS 현위치 적용 완료 (가까운 장소 우선으로 검색됩니다)",
                     move_center=True,
                 )
             )
         elif evt_type == "geo_error":
-            asyncio.create_task(process_geo_fallback())
+            asyncio.create_task(process_geo_unavailable())
 
     # GitHub Pages HTTPS 주소로 단일 WebView 로드
     map_webview = fwv.WebView(

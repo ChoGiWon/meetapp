@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no">
     <title>MeetApp Map</title>
     <script>
         var urlParams = new URLSearchParams(window.location.search);
@@ -26,6 +26,10 @@
             margin: 0; padding: 0; width: 100%; height: 100%;
             overflow: hidden; background: #FAFAFA; font-family: sans-serif;
             position: relative;
+            touch-action: none;
+            overscroll-behavior: none;
+            -webkit-user-select: none;
+            user-select: none;
         }
         .provider-panel {
             position: absolute;
@@ -45,7 +49,7 @@
             z-index: 10;
         }
         .map-canvas {
-            width: 100%; height: 100%; touch-action: none;
+            width: 100%; height: 100%;
         }
         .status-box {
             width: 100%; height: 100%; padding: 24px; box-sizing: border-box;
@@ -255,7 +259,6 @@
         function renderMyLocationMarkers() {
             if (myLat === null || myLon === null) return;
 
-            // 1. 티맵 현위치 표시
             if (tmapObj && typeof Tmapv3 !== "undefined") {
                 if (tmapMyLocMarker) {
                     try { tmapMyLocMarker.setMap(null); } catch (e) {}
@@ -270,7 +273,6 @@
                 } catch (e) {}
             }
 
-            // 2. 카카오맵 현위치 표시
             if (kakaoObj && typeof kakao !== "undefined") {
                 if (kakaoMyLocOverlay) {
                     kakaoMyLocOverlay.setMap(null);
@@ -285,7 +287,6 @@
                 kakaoMyLocOverlay.setMap(kakaoObj);
             }
 
-            // 3. 네이버맵 현위치 표시
             if (naverObj && typeof naver !== "undefined") {
                 if (naverMyLocMarker) {
                     naverMyLocMarker.setMap(null);
@@ -365,8 +366,8 @@
                 },
                 {
                     enableHighAccuracy: true,
-                    timeout: 6000,
-                    maximumAge: 15000
+                    timeout: 4500,
+                    maximumAge: 10000
                 }
             );
         }
@@ -485,8 +486,12 @@
                         var container = document.getElementById("kakao_div");
                         kakaoObj = new kakao.maps.Map(container, {
                             center: new kakao.maps.LatLng(currentLat, currentLon),
-                            level: 3
+                            level: 3,
+                            draggable: true,
+                            zoomable: true
                         });
+                        kakaoObj.setDraggable(true);
+                        kakaoObj.setZoomable(true);
 
                         kakao.maps.event.addListener(kakaoObj, "click", function (mouseEvent) {
                             var latlng = mouseEvent.latLng;
@@ -504,6 +509,7 @@
                 });
             } else {
                 kakaoObj.relayout();
+                kakaoObj.setZoomable(true);
                 kakaoObj.setCenter(new kakao.maps.LatLng(currentLat, currentLon));
                 renderMyLocationMarkers();
                 updateZoomVisibility();
@@ -516,7 +522,12 @@
                 try {
                     naverObj = new naver.maps.Map("naver_div", {
                         center: new naver.maps.LatLng(currentLat, currentLon),
-                        zoom: 16
+                        zoom: 16,
+                        draggable: true,
+                        pinchZoom: true,
+                        scrollWheel: true,
+                        disableDoubleTapZoom: false,
+                        disableDoubleClickZoom: false
                     });
 
                     naver.maps.Event.addListener(naverObj, "click", function (e) {
